@@ -126,13 +126,47 @@
     }
   }
 
+  function coerceEntityState(input) {
+    if (input && typeof input === 'object' && input.byId && input.allIds) return input;
+    if (Array.isArray(input)) return upsertEntityState(input.filter(Boolean));
+    return null;
+  }
+
+  function coerceLegacyJsonShape(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    const candidates = [payload, payload.appState, payload.state, payload.localData, payload.data, payload.snapshot, payload.exportedState].filter(function (item) {
+      return item && typeof item === 'object';
+    });
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      if (candidate.entities && candidate.entities.bills && candidate.entities.payments) return candidate;
+      const billsSource = candidate.bills || candidate.Bills || (candidate.entities && candidate.entities.bills);
+      const paymentsSource = candidate.payments || candidate.Payments || (candidate.entities && candidate.entities.payments);
+      const bills = coerceEntityState(billsSource);
+      const payments = coerceEntityState(paymentsSource);
+      if (bills && payments) {
+        return {
+          schemaVersion: Number.isInteger(candidate.schemaVersion) ? candidate.schemaVersion : 1,
+          entities: { bills: bills, payments: payments },
+          forecastSettings: candidate.forecastSettings || candidate.ForecastSettings || payload.forecastSettings || payload.ForecastSettings || DEFAULT_STATE.forecastSettings,
+          preferences: candidate.preferences || candidate.Preferences || payload.preferences || payload.Preferences || DEFAULT_STATE.preferences,
+          ui: candidate.ui || payload.ui || DEFAULT_STATE.ui
+        };
+      }
+    }
+    return null;
+  }
+
   function normalizeImportedState(payload) {
     if (!payload || typeof payload !== 'object') throw new Error('The file is empty or is not valid JSON.');
-    if (!payload.entities || !payload.entities.bills || !payload.entities.payments) {
+    const normalizedPayload = coerceLegacyJsonShape(payload);
+    if (!normalizedPayload || !normalizedPayload.entities || !normalizedPayload.entities.bills || !normalizedPayload.entities.payments) {
       throw new Error('This file does not match the Family Monthly Bills local data format.');
     }
-    const schemaVersion = Number.isInteger(payload.schemaVersion) ? payload.schemaVersion : 1;
-    const next = Object.assign({}, payload, { schemaVersion: schemaVersion });
+    const schemaVersion = Number.isInteger(normalizedPayload.schemaVersion) ? normalizedPayload.schemaVersion : 1;
+    const next = Object.assign({}, normalizedPayload, { schemaVersion: schemaVersion });
+    if (!next.forecastSettings || typeof next.forecastSettings !== 'object') next.forecastSettings = deepClone(DEFAULT_STATE.forecastSettings);
+    if (!next.preferences || typeof next.preferences !== 'object') next.preferences = deepClone(DEFAULT_STATE.preferences);
     if (!next.ui || typeof next.ui !== 'object') next.ui = {};
     next.ui.activeDestination = 'settings';
     next.ui.selectedBillId = null;
