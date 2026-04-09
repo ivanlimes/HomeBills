@@ -132,11 +132,54 @@
     return null;
   }
 
+  function unwrapPossiblyEncodedJson(payload) {
+    let current = payload;
+    for (let i = 0; i < 3; i += 1) {
+      if (typeof current !== 'string') break;
+      const trimmed = current.trim();
+      if (!trimmed) break;
+      try {
+        current = JSON.parse(trimmed);
+      } catch (_error) {
+        break;
+      }
+    }
+    return current;
+  }
+
+  function collectObjectCandidates(root) {
+    const queue = [root];
+    const seen = typeof WeakSet === 'function' ? new WeakSet() : null;
+    const out = [];
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current || typeof current !== 'object') continue;
+      if (seen) {
+        if (seen.has(current)) continue;
+        seen.add(current);
+      }
+      out.push(current);
+      Object.keys(current).forEach(function (key) {
+        const value = current[key];
+        if (value && typeof value === 'object') queue.push(value);
+        else if (typeof value === 'string') {
+          const parsed = unwrapPossiblyEncodedJson(value);
+          if (parsed && typeof parsed === 'object') queue.push(parsed);
+        }
+      });
+    }
+    return out;
+  }
+
   function coerceLegacyJsonShape(payload) {
+    payload = unwrapPossiblyEncodedJson(payload);
     if (!payload || typeof payload !== 'object') return null;
-    const candidates = [payload, payload.appState, payload.state, payload.localData, payload.data, payload.snapshot, payload.exportedState].filter(function (item) {
-      return item && typeof item === 'object';
-    });
+    const topLevelAppStateString = payload[APP_STATE_KEY];
+    if (typeof topLevelAppStateString === 'string') {
+      const parsedTopLevelState = unwrapPossiblyEncodedJson(topLevelAppStateString);
+      if (parsedTopLevelState && typeof parsedTopLevelState === 'object') payload = parsedTopLevelState;
+    }
+    const candidates = collectObjectCandidates(payload);
     for (let i = 0; i < candidates.length; i += 1) {
       const candidate = candidates[i];
       if (candidate.entities && candidate.entities.bills && candidate.entities.payments) return candidate;
@@ -157,11 +200,18 @@
     return null;
   }
 
+  function summarizeKeys(payload) {
+    if (!payload || typeof payload !== 'object') return 'No object keys were found.';
+    const keys = Object.keys(payload).slice(0, 10);
+    return keys.length ? ('Found keys: ' + keys.join(', ')) : 'The JSON object has no top-level keys.';
+  }
+
   function normalizeImportedState(payload) {
+    payload = unwrapPossiblyEncodedJson(payload);
     if (!payload || typeof payload !== 'object') throw new Error('The file is empty or is not valid JSON.');
     const normalizedPayload = coerceLegacyJsonShape(payload);
     if (!normalizedPayload || !normalizedPayload.entities || !normalizedPayload.entities.bills || !normalizedPayload.entities.payments) {
-      throw new Error('This file does not match the Family Monthly Bills local data format.');
+      throw new Error('This file does not match the Family Monthly Bills local data format. ' + summarizeKeys(payload));
     }
     const schemaVersion = Number.isInteger(normalizedPayload.schemaVersion) ? normalizedPayload.schemaVersion : 1;
     const next = Object.assign({}, normalizedPayload, { schemaVersion: schemaVersion });
